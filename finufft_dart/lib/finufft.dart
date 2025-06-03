@@ -1,5 +1,5 @@
 import 'dart:ffi' as ffi;
-import 'package:ffi/ffi.dart'; // This should provide calloc
+import 'package:ffi/ffi.dart';
 
 import 'src/finufft_bindings.dart' as bindings;
 import 'src/complex.dart';
@@ -12,39 +12,45 @@ class FINUFFT implements ffi.Finalizable {
 
   final bool _isDoublePrecision;
   final int _dim;
-  final int _type;
+  // final int _type; // Type is now fixed to 1
   final int _nTransf;
 
-  final List<int> _nModes;
-
+  late final int _prodNModes;
+  int _M = 0;
+  // int _Nk = 0; // _Nk is only for Type 3, can be removed.
 
   static final _finalizerToken = Expando<ffi.NativeFinalizer>();
 
   FINUFFT({
     required String libraryPath,
-    required int type,
+    // required int type, // Removed, will be hardcoded to 1
     required int dim,
     required List<int> nModes,
     int iflag = 1,
     double tolerance = 1e-6,
-    bool useDoublePrecision = true,
+    bool useDoublePrecision = true, // Changed from this.useDoublePrecision for clarity
     FinufftOptions? options,
     int nTransforms = 1,
   }) : _isDoublePrecision = useDoublePrecision,
        _dim = dim,
-       _type = type,
-       _nTransf = nTransforms,
-       _nModes = List.from(nModes) {
+       // _type = type, // type is now 1
+       _nTransf = nTransforms {
+
+    const int type1Nufft = 1; // Hardcoded for Type 1
 
     if (dim < 1 || dim > 3) {
       throw ArgumentError('Dimension (dim) must be 1, 2, or 3.');
     }
+    if (nModes.isEmpty) {
+        throw ArgumentError('nModes list cannot be empty.');
+    }
     if (nModes.length != dim) {
       throw ArgumentError('nModes length must match dimension (dim).');
     }
-    if (type < 1 || type > 3) {
-      throw ArgumentError('NUFFT type must be 1, 2, or 3.');
-    }
+    // No longer need to check _type public parameter
+
+    _prodNModes = nModes.reduce((value, element) => value * element);
+    if (_prodNModes == 0) throw ArgumentError("Product of nModes cannot be zero.");
 
     _nativeLib = bindings.FinufftNativeLib(libraryPath);
 
@@ -69,48 +75,47 @@ class FINUFFT implements ffi.Finalizable {
     if (_isDoublePrecision) {
       final planPtrPtr = calloc<ffi.Pointer<bindings.FinufftPlanDouble>>();
       retCode = _nativeLib.finufft_makeplan(
-          _type, _dim, nModesPtr, iflag, _nTransf, tolerance, planPtrPtr, nativeOptsPtr);
+          type1Nufft, _dim, nModesPtr, iflag, _nTransf, tolerance, planPtrPtr, nativeOptsPtr); // Use type1Nufft
       if (planPtrPtr.value == ffi.nullptr && retCode == 0) {
           calloc.free(nModesPtr);
           if (nativeOptsPtr != ffi.nullptr) calloc.free(nativeOptsPtr);
           calloc.free(planPtrPtr);
-          throw FinufftException('finufft_makeplan returned success code but null plan (double)');
+          throw FinufftException('finufft_makeplan returned success code but null plan (double, type 1)');
       }
       _plan = planPtrPtr.value;
       calloc.free(planPtrPtr);
       if (retCode != 0) {
          calloc.free(nModesPtr);
          if (nativeOptsPtr != ffi.nullptr) calloc.free(nativeOptsPtr);
-         throw FinufftException('Failed to create FINUFFT plan (double)', errorCode: retCode);
+         throw FinufftException('Failed to create FINUFFT plan (double, type 1)', errorCode: retCode);
       }
     } else {
       final planPtrPtr = calloc<ffi.Pointer<bindings.FinufftPlanSingle>>();
       retCode = _nativeLib.finufftf_makeplan(
-          _type, _dim, nModesPtr, iflag, _nTransf, tolerance.toFloat(), planPtrPtr, nativeOptsPtr);
+          type1Nufft, _dim, nModesPtr, iflag, _nTransf, tolerance.toFloat(), planPtrPtr, nativeOptsPtr); // Use type1Nufft
       if (planPtrPtr.value == ffi.nullptr && retCode == 0) {
           calloc.free(nModesPtr);
           if (nativeOptsPtr != ffi.nullptr) calloc.free(nativeOptsPtr);
           calloc.free(planPtrPtr);
-          throw FinufftException('finufftf_makeplan returned success code but null plan (single)');
+          throw FinufftException('finufftf_makeplan returned success code but null plan (single, type 1)');
       }
       _plan = planPtrPtr.value;
       calloc.free(planPtrPtr);
        if (retCode != 0) {
          calloc.free(nModesPtr);
          if (nativeOptsPtr != ffi.nullptr) calloc.free(nativeOptsPtr);
-         throw FinufftException('Failed to create FINUFFT plan (single)', errorCode: retCode);
+         throw FinufftException('Failed to create FINUFFT plan (single, type 1)', errorCode: retCode);
       }
     }
 
     if (nativeOptsPtr != ffi.nullptr) calloc.free(nativeOptsPtr);
     calloc.free(nModesPtr);
 
-
     ffi.NativeFinalizer finalizer;
     if (_isDoublePrecision) {
-      finalizer = ffi.NativeFinalizer(_nativeLib.finufft_destroy_ptr.cast<ffi.NativeFinalizerFunction>());
+      finalizer = ffi.NativeFinalizer(_nativeLib.finufft_destroy_ptr.cast());
     } else {
-      finalizer = ffi.NativeFinalizer(_nativeLib.finufftf_destroy_ptr.cast<ffi.NativeFinalizerFunction>());
+      finalizer = ffi.NativeFinalizer(_nativeLib.finufftf_destroy_ptr.cast());
     }
     finalizer.attach(this, _plan.cast(), detach: this);
     _finalizerToken[this] = finalizer;
@@ -174,113 +179,106 @@ class FINUFFT implements ffi.Finalizable {
     return result;
   }
 
-
+  // Simplified setPoints for Type 1 NUFFT
   void setPoints({
     required List<double> xj,
     List<double>? yj,
     List<double>? zj,
-    List<double>? s,
-    List<double>? t,
-    List<double>? u,
   }) {
-    final M = xj.length;
-    final N = (_type == 3) ? (s?.length ?? 0) : 0;
+    _M = xj.length;
+    if (_M == 0) throw ArgumentError("xj (non-uniform points) cannot be empty.");
 
     if (_dim >= 2 && yj == null) throw ArgumentError("yj is required for dim >= 2");
     if (_dim == 3 && zj == null) throw ArgumentError("zj is required for dim == 3");
-    if (_type == 3 && s == null) throw ArgumentError("s is required for type 3 transform");
-    if (_type == 3 && _dim >= 2 && t == null) throw ArgumentError("t is required for type 3, dim >= 2");
-    if (_type == 3 && _dim == 3 && u == null) throw ArgumentError("u is required for type 3, dim == 3");
+    if (_dim >= 2 && yj != null && yj.length != _M) throw ArgumentError("yj length must match xj length.");
+    if (_dim == 3 && zj != null && zj.length != _M) throw ArgumentError("zj length must match xj length.");
+
 
     ffi.Pointer<ffi.NativeType> xj_ptr = ffi.nullptr, yj_ptr = ffi.nullptr, zj_ptr = ffi.nullptr;
-    ffi.Pointer<ffi.NativeType> s_ptr = ffi.nullptr, t_ptr = ffi.nullptr, u_ptr = ffi.nullptr;
 
     try {
       if (_isDoublePrecision) {
         xj_ptr = _listToNativeArray<ffi.Double>(xj, (count) => calloc<ffi.Double>(count));
         if (yj != null) yj_ptr = _listToNativeArray<ffi.Double>(yj, (count) => calloc<ffi.Double>(count));
         if (zj != null) zj_ptr = _listToNativeArray<ffi.Double>(zj, (count) => calloc<ffi.Double>(count));
-        if (s != null) s_ptr = _listToNativeArray<ffi.Double>(s, (count) => calloc<ffi.Double>(count));
-        if (t != null) t_ptr = _listToNativeArray<ffi.Double>(t, (count) => calloc<ffi.Double>(count));
-        if (u != null) u_ptr = _listToNativeArray<ffi.Double>(u, (count) => calloc<ffi.Double>(count));
 
         final ret = _nativeLib.finufft_setpts(
-            _plan.cast<bindings.FinufftPlanDouble>(), M,
-            xj_ptr.cast<ffi.Double>(), yj_ptr.cast<ffi.Double>(), zj_ptr.cast<ffi.Double>(),
-            N,
-            s_ptr.cast<ffi.Double>(), t_ptr.cast<ffi.Double>(), u_ptr.cast<ffi.Double>()
+            _plan.cast<bindings.FinufftPlanDouble>(), _M,
+            xj_ptr.cast<ffi.Double>(),
+            yj_ptr.cast<ffi.Double>(),
+            zj_ptr.cast<ffi.Double>(),
+            0,                         // N (number of Type 3 targets) is 0 for Type 1
+            ffi.nullptr, ffi.nullptr, ffi.nullptr // s, t, u are null for Type 1
         );
-        if (ret != 0) throw FinufftException("finufft_setpts failed (double)", errorCode: ret);
+        if (ret != 0) throw FinufftException("finufft_setpts failed (double, type 1)", errorCode: ret);
 
-      } else {
+      } else { // Single precision
         xj_ptr = _listToNativeArray<ffi.Float>(xj, (count) => calloc<ffi.Float>(count));
         if (yj != null) yj_ptr = _listToNativeArray<ffi.Float>(yj, (count) => calloc<ffi.Float>(count));
         if (zj != null) zj_ptr = _listToNativeArray<ffi.Float>(zj, (count) => calloc<ffi.Float>(count));
-        if (s != null) s_ptr = _listToNativeArray<ffi.Float>(s, (count) => calloc<ffi.Float>(count));
-        if (t != null) t_ptr = _listToNativeArray<ffi.Float>(t, (count) => calloc<ffi.Float>(count));
-        if (u != null) u_ptr = _listToNativeArray<ffi.Float>(u, (count) => calloc<ffi.Float>(count));
 
         final ret = _nativeLib.finufftf_setpts(
-            _plan.cast<bindings.FinufftPlanSingle>(), M,
-            xj_ptr.cast<ffi.Float>(), yj_ptr.cast<ffi.Float>(), zj_ptr.cast<ffi.Float>(),
-            N,
-            s_ptr.cast<ffi.Float>(), t_ptr.cast<ffi.Float>(), u_ptr.cast<ffi.Float>()
+            _plan.cast<bindings.FinufftPlanSingle>(), _M,
+            xj_ptr.cast<ffi.Float>(),
+            yj_ptr.cast<ffi.Float>(),
+            zj_ptr.cast<ffi.Float>(),
+            0,                         // N is 0 for Type 1
+            ffi.nullptr, ffi.nullptr, ffi.nullptr // s, t, u are null for Type 1
         );
-        if (ret != 0) throw FinufftException("finufftf_setpts failed (single)", errorCode: ret);
+        if (ret != 0) throw FinufftException("finufftf_setpts failed (single, type 1)", errorCode: ret);
       }
     } finally {
       if (xj_ptr != ffi.nullptr) calloc.free(xj_ptr);
       if (yj_ptr != ffi.nullptr) calloc.free(yj_ptr);
       if (zj_ptr != ffi.nullptr) calloc.free(zj_ptr);
-      if (s_ptr != ffi.nullptr) calloc.free(s_ptr);
-      if (t_ptr != ffi.nullptr) calloc.free(t_ptr);
-      if (u_ptr != ffi.nullptr) calloc.free(u_ptr);
     }
   }
 
+  // Simplified execute for Type 1 NUFFT
   List<Complex> execute(List<Complex> sources) {
-    final numSourceElements = sources.length * _nTransf;
+    // For Type 1: input sources are M strengths, output results are prodNModes Fourier coefficients.
+    final int numInputComplexPerTransf = _M;
+    final int numOutputComplexPerTransf = _prodNModes;
 
-    int numResultElements;
-    if (_type == 1 || _type == 3) {
-        numResultElements = _nModes.reduce((a, b) => a * b) * _nTransf;
-         if (_type == 3) {
-             numResultElements = sources.length * _nTransf;
-        }
-
-    } else {
-        numResultElements = numSourceElements;
+    if (_M == 0) {
+        throw StateError("Number of non-uniform points (M) is 0. Call setPoints first.");
     }
-
+    if (sources.length != numInputComplexPerTransf * _nTransf) {
+      throw ArgumentError(
+        "Sources length (\${sources.length}) does not match expected input size (M * nTransf = \${numInputComplexPerTransf * _nTransf}) for Type 1 transform."
+      );
+    }
 
     ffi.Pointer<ffi.NativeType> weightsPtr = ffi.nullptr;
     ffi.Pointer<ffi.NativeType> resultsPtr = ffi.nullptr;
     List<Complex> resultList = [];
 
+    final totalOutputComplexNumbers = numOutputComplexPerTransf * _nTransf;
+
     try {
       if (_isDoublePrecision) {
         weightsPtr = _complexListToNativeArray<ffi.Double>(sources, (count) => calloc<ffi.Double>(count));
-        resultsPtr = calloc.allocate<ffi.Double>(numResultElements * 2);
+        resultsPtr = calloc.allocate<ffi.Double>(totalOutputComplexNumbers * 2);
 
         final ret = _nativeLib.finufft_execute(
             _plan.cast<bindings.FinufftPlanDouble>(),
             weightsPtr.cast<ffi.Double>(),
             resultsPtr.cast<ffi.Double>()
         );
-        if (ret != 0) throw FinufftException("finufft_execute failed (double)", errorCode: ret);
-        resultList = _nativeComplexArrayToList<ffi.Double>(resultsPtr.cast<ffi.Double>(), numResultElements);
+        if (ret != 0) throw FinufftException("finufft_execute failed (double, type 1)", errorCode: ret);
+        resultList = _nativeComplexArrayToList<ffi.Double>(resultsPtr.cast<ffi.Double>(), totalOutputComplexNumbers);
 
-      } else {
+      } else { // Single precision
         weightsPtr = _complexListToNativeArray<ffi.Float>(sources, (count) => calloc<ffi.Float>(count));
-        resultsPtr = calloc.allocate<ffi.Float>(numResultElements * 2);
+        resultsPtr = calloc.allocate<ffi.Float>(totalOutputComplexNumbers * 2);
 
         final ret = _nativeLib.finufftf_execute(
             _plan.cast<bindings.FinufftPlanSingle>(),
             weightsPtr.cast<ffi.Float>(),
             resultsPtr.cast<ffi.Float>()
         );
-        if (ret != 0) throw FinufftException("finufftf_execute failed (single)", errorCode: ret);
-        resultList = _nativeComplexArrayToList<ffi.Float>(resultsPtr.cast<ffi.Float>(), numResultElements);
+        if (ret != 0) throw FinufftException("finufftf_execute failed (single, type 1)", errorCode: ret);
+        resultList = _nativeComplexArrayToList<ffi.Float>(resultsPtr.cast<ffi.Float>(), totalOutputComplexNumbers);
       }
     } finally {
       if (weightsPtr != ffi.nullptr) calloc.free(weightsPtr);
@@ -299,33 +297,37 @@ class FINUFFT implements ffi.Finalizable {
         throw StateError("performNUFFT1D is for 1D configured FINUFFT instances.");
     }
 
-    Map<String, List<Complex>> results = {};
+    this.setPoints(xj:t);
 
-    List<Complex> processSignal(List<double> signalValues) {
-        final complexSignal = signalValues.map((val) => Complex(val, 0.0)).toList();
-        if (_type == 1) {
-            this.setPoints(xj: t);
-            return this.execute(complexSignal);
-        } else if (_type == 2) {
-            this.setPoints(xj: t);
-            return this.execute(complexSignal);
-        } else {
-            throw StateError("performNUFFT1D requires Type 1 or Type 2 plan.");
+    Map<String, List<Complex>> resultsMap = {};
+
+    List<Complex> _doNufftForSignal(List<double> signalValues, String signalName) {
+        if (signalValues.length != _M) { // Class instance is already Type 1
+            throw ArgumentError("Signal '\$signalName' length (\${signalValues.length}) must match number of time points M (\$_M) set by setPoints(xj:t).");
         }
+        final complexSignal = signalValues.map((val) => Complex(val, 0.0)).toList();
+        return this.execute(complexSignal);
     }
 
-    if (xSignal != null) results['fx'] = processSignal(xSignal);
-    if (ySignal != null) results['fy'] = processSignal(ySignal);
-    if (zSignal != null) results['fz'] = processSignal(zSignal);
+    if (xSignal != null) resultsMap['fx'] = _doNufftForSignal(xSignal, "xSignal");
+    if (ySignal != null) resultsMap['fy'] = _doNufftForSignal(ySignal, "ySignal");
+    if (zSignal != null) resultsMap['fz'] = _doNufftForSignal(zSignal, "zSignal");
 
     if (xSignal != null && ySignal != null && zSignal != null) {
-        final sumSignal = List<double>.generate(t.length, (i) => xSignal[i] + ySignal[i] + zSignal[i]);
-        results['fsum'] = processSignal(sumSignal);
+        if (xSignal.length == _M && ySignal.length == _M && zSignal.length == _M) {
+            final sumSignal = List<double>.generate(_M, (i) => xSignal[i] + ySignal[i] + zSignal[i]);
+            resultsMap['fsum'] = _doNufftForSignal(sumSignal, "sumSignal");
+        } else {
+            print("Warning: x, y, z signals have different lengths than M (\$_M), cannot compute sum spectrum robustly this way.");
+        }
     }
-    return results;
+    return resultsMap;
   }
 
-  List<double> calculateFrequencyDomain(List<double> timeVector, int numModes, {bool fftShift = true}) {
+  List<double> calculateFrequencyDomain(List<double> timeVector, {bool fftShift = true}) {
+    final int numModesToUse = _prodNModes;
+    if (numModesToUse == 0) throw StateError("Number of modes (_prodNModes) is not initialized (was zero).");
+
     if (timeVector.isEmpty) return [];
     double tTotal;
     if (timeVector.length == 1) {
@@ -336,17 +338,21 @@ class FINUFFT implements ffi.Finalizable {
             tTotal += (timeVector.last - timeVector.first) / (timeVector.length -1) ;
         }
     }
-    if (tTotal <= 0) throw ArgumentError("Time vector must span a positive duration.");
+    if (tTotal <= 0) throw ArgumentError("Time vector must span a positive duration for frequency calculation.");
 
     final df = 1.0 / tTotal;
-    final freqs = List<double>.filled(numModes, 0.0);
+    final freqs = List<double>.filled(numModesToUse, 0.0);
 
     if (fftShift) {
-        for (int i = 0; i < numModes; i++) {
-            freqs[i] = (i <= numModes / 2 -1) ? i * df : (i - numModes) * df;
+        for (int i = 0; i < numModesToUse; i++) {
+            if (i < (numModesToUse + 1) / 2) {
+                freqs[i] = i * df;
+            } else {
+                freqs[i] = (i - numModesToUse) * df;
+            }
         }
     } else {
-        for (int i = 0; i < numModes; i++) {
+        for (int i = 0; i < numModesToUse; i++) {
             freqs[i] = i * df;
         }
     }
@@ -363,13 +369,11 @@ class FINUFFT implements ffi.Finalizable {
       } else {
         _nativeLib.finufftf_destroy(_plan.cast<bindings.FinufftPlanSingle>());
       }
-       _finalizerToken[this] = null;
+      _finalizerToken[this] = null;
     }
   }
 }
 
 extension FloatConversion on double {
-  double toFloat() {
-    return this;
-  }
+  double toFloat() => this;
 }
