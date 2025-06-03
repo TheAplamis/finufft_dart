@@ -9,12 +9,39 @@ import 'package:finufft_dart/src/complex.dart';
 import 'package:finufft_dart/src/exceptions.dart';
 import 'package:finufft_dart/src/finufft_bindings.dart' as bindings;
 
+// IMPORTANT FOR TESTING:
+// For tests that interact with the native FINUFFT library to run,
+// the `placeholderLibPath` below must resolve to a valid, compiled FINUFFT shared library.
+// 1. Ensure you have compiled FINUFFT as a shared library (see README.md in finufft_dart).
+// 2. Either:
+//    a) Place the compiled library (e.g., libfinufft.so, libfinufft.dylib, finufft.dll)
+//       in a directory where the system's dynamic linker can find it (e.g., project root,
+//       or a path in LD_LIBRARY_PATH (Linux), DYLD_LIBRARY_PATH (macOS)).
+//    b) Modify `placeholderLibPath` to be an absolute path to your compiled library for local testing.
+// For CI, the build script should place the library at a predictable location.
 final String placeholderLibPath = Platform.isWindows ? 'finufft.dll' :
                                 Platform.isMacOS ? 'libfinufft.dylib' : 'libfinufft.so';
 
+bool _libraryLoadedSuccessfully = false;
+bool _libraryLoadAttempted = false;
+
 bool canLoadFinufftLibrary() {
-  print("Warning: Tests requiring actual FINUFFT library will be skipped or may fail if '$placeholderLibPath' is not found or invalid.");
-  return false;
+  if (_libraryLoadAttempted) {
+    return _libraryLoadedSuccessfully;
+  }
+  _libraryLoadAttempted = true;
+  print("Attempting to load FINUFFT native library at '$placeholderLibPath'. Tests requiring this will be skipped if loading fails.");
+  try {
+    DynamicLibrary.open(placeholderLibPath);
+    _libraryLoadedSuccessfully = true;
+    print("Native FINUFFT library loaded successfully from '$placeholderLibPath'.");
+    return true;
+  } catch (e) {
+    print("Failed to load native FINUFFT library from '$placeholderLibPath': $e");
+    print("Native library dependent tests will be skipped.");
+    _libraryLoadedSuccessfully = false;
+    return false;
+  }
 }
 
 void main() {
