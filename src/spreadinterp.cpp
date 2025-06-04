@@ -149,16 +149,16 @@ constexpr auto initialize_complex_register(V a, V b) noexcept {
 }
 template<class arch_t, typename T>
 constexpr auto zip_low_index =
-    xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<T>, arch_t, zip_low>();
+    xsimd::make_batch_constant<xsimd::batch<xsimd::as_unsigned_integer_t<T>, arch_t>, zip_low>();
 template<class arch_t, typename T>
 constexpr auto zip_hi_index =
-    xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<T>, arch_t, zip_hi>();
+    xsimd::make_batch_constant<xsimd::batch<xsimd::as_unsigned_integer_t<T>, arch_t>, zip_hi>();
 // template<class arch_t, typename T>
 // constexpr auto select_even_mask =
-//     xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<T>, arch_t, select_even>();
+//     xsimd::make_batch_constant<xsimd::batch<xsimd::as_unsigned_integer_t<T>, arch_t>, select_even>();
 // template<class arch_t, typename T>
 // constexpr auto select_odd_mask =
-//     xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<T>, arch_t, select_odd>();
+//     xsimd::make_batch_constant<xsimd::batch<xsimd::as_unsigned_integer_t<T>, arch_t>, select_odd>();
 template<typename T, std::size_t N, std::size_t M, std::size_t PaddedM>
 constexpr std::array<std::array<T, PaddedM>, N> pad_2D_array_with_zeros(
     const std::array<std::array<T, M>, N> &input) noexcept {
@@ -318,10 +318,10 @@ Two upsampfacs implemented. Params must match ref formula. Barnett 4/24/18 */
     // some xsimd constant for shuffle or inverse
     static constexpr auto shuffle_batch = []() constexpr noexcept {
       if constexpr (tail) {
-        return xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<T>, arch_t,
+        return xsimd::make_batch_constant<xsimd::batch<xsimd::as_unsigned_integer_t<T>, arch_t>,
                                           shuffle_index<tail>>();
       } else {
-        return xsimd::make_batch_constant<xsimd::as_unsigned_integer_t<T>, arch_t,
+        return xsimd::make_batch_constant<xsimd::batch<xsimd::as_unsigned_integer_t<T>, arch_t>,
                                           reverse_index<simd_size>>();
       }
     }();
